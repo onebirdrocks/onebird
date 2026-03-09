@@ -14,10 +14,45 @@ const ONEBIRD_ASCII: &str = r#"   ___
  ((   ))
   -"-"-"#;
 
-#[derive(Default)]
+const PROVIDERS: &[&str] = &[
+    "Anthropic (Claude Pro/Max)",
+    "GitHub Copilot",
+    "Google Cloud Code Assist (Gemini CLI)",
+    "Antigravity (Gemini 3, Claude, GPT-OSS)",
+    "ChatGPT Plus/Pro (Codex Subscription)",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Home,
+    Login,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HintMode {
+    Default,
+    Shortcuts,
+    Commands,
+}
+
 struct App {
     messages: Vec<Line<'static>>,
     input: String,
+    mode: Mode,
+    login_index: usize,
+    hint_mode: HintMode,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            input: String::new(),
+            mode: Mode::Home,
+            login_index: 0,
+            hint_mode: HintMode::Default,
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -56,7 +91,7 @@ fn run_app(
                 .constraints(
                     [
                         Constraint::Length(9), // welcome panel with titled border
-                        Constraint::Min(3),    // prompt + hints area
+                        Constraint::Min(3),    // prompt / login area
                     ]
                     .as_ref(),
                 )
@@ -117,8 +152,7 @@ fn run_app(
             let right_lines: Vec<Line> = vec![
                 Line::from(Span::styled(
                     "Tips for getting started",
-                    Style::default()
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     "Run /init to create a ONEBIRD.md file",
@@ -131,8 +165,7 @@ fn run_app(
                 Line::from(""),
                 Line::from(Span::styled(
                     "Recent activity",
-                    Style::default()
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     "No recent activity",
@@ -147,51 +180,172 @@ fn run_app(
             frame.render_widget(right_block, columns[1]);
             frame.render_widget(right, right_inner);
 
-            // Prompt + hint area (mimic Claude Code bottom region).
-            let mut prompt_lines: Vec<Line> = Vec::new();
-            if app.input.is_empty() {
-                prompt_lines.push(Line::from(vec![
-                    Span::raw("> "),
-                    Span::styled(
-                        r#"Try "refactor <filepath>""#,
-                        Style::default().fg(Color::Cyan),
-                    ),
-                ]));
-            } else {
-                prompt_lines.push(Line::from(format!("> {}", app.input)));
-            }
-            prompt_lines.push(Line::from(Span::styled(
-                "? for shortcuts",
-                Style::default().fg(Color::Cyan),
-            )));
+            // Bottom area: either prompt or login selector, depending on mode.
+            match app.mode {
+                Mode::Home => {
+                    let mut lines: Vec<Line> = Vec::new();
 
-            let prompt_block =
-                Block::default().borders(Borders::TOP);
-            let prompt_para = Paragraph::new(prompt_lines).block(prompt_block);
-            frame.render_widget(prompt_para, chunks[1]);
+                    // First line: prompt itself.
+                    if app.input.is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::raw("> "),
+                            Span::styled(
+                                r#"Try "refactor <filepath>""#,
+                                Style::default().fg(Color::Cyan),
+                            ),
+                        ]));
+                    } else {
+                        lines.push(Line::from(format!("> {}", app.input)));
+                    }
+
+                    // Following lines: hints / help.
+                    match app.hint_mode {
+                        HintMode::Default => {
+                            lines.push(Line::from(Span::styled(
+                                "? for shortcuts, / for commands",
+                                Style::default().fg(Color::Cyan),
+                            )));
+                        }
+                        HintMode::Shortcuts => {
+                            lines.push(Line::from(Span::styled(
+                                "Shortcuts:",
+                                Style::default().fg(Color::Cyan),
+                            )));
+                            lines.push(Line::from("  ?         Show shortcuts"));
+                            lines.push(Line::from("  /         Start a command (e.g. /login)"));
+                            lines.push(Line::from("  Ctrl-C    Quit onebird-cli"));
+                        }
+                        HintMode::Commands => {
+                            lines.push(Line::from(Span::styled(
+                                "Commands:",
+                                Style::default().fg(Color::Cyan),
+                            )));
+                            lines.push(Line::from("  /login    Select provider to login"));
+                        }
+                    }
+
+                    let prompt_block = Block::default().borders(Borders::TOP);
+                    let prompt_para = Paragraph::new(lines).block(prompt_block);
+                    frame.render_widget(prompt_para, chunks[1]);
+                }
+                Mode::Login => {
+                    let block = Block::default()
+                        .borders(Borders::TOP)
+                        .border_style(Style::default().fg(Color::Yellow));
+                    let inner = block.inner(chunks[1]);
+                    frame.render_widget(block, chunks[1]);
+
+                    let mut lines: Vec<Line> = Vec::new();
+                    lines.push(Line::from("Select provider to login:"));
+                    lines.push(Line::from(""));
+                    for (idx, provider) in PROVIDERS.iter().enumerate() {
+                        let indicator = if idx == app.login_index { "→ " } else { "  " };
+                        let style = if idx == app.login_index {
+                            Style::default().add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default()
+                        };
+                        lines.push(Line::from(Span::styled(
+                            format!("{indicator}{provider}"),
+                            style,
+                        )));
+                    }
+                    let para = Paragraph::new(lines);
+                    frame.render_widget(para, inner);
+                }
+            }
         })?;
 
         if event::poll(std::time::Duration::from_millis(200))? {
             match event::read()? {
-                Event::Key(key) => match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                        return Ok(())
+                Event::Key(key) => {
+                    // Global exit shortcut.
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(event::KeyModifiers::CONTROL)
+                    {
+                        return Ok(());
                     }
-                    KeyCode::Char(ch) => {
-                        app.input.push(ch);
+
+                    match app.mode {
+                        Mode::Home => match key.code {
+                            KeyCode::Char('?') => {
+                                if app.input.is_empty() {
+                                    // Show shortcuts instead of inserting '?' into input.
+                                    app.hint_mode = HintMode::Shortcuts;
+                                } else {
+                                    app.hint_mode = HintMode::Default;
+                                    app.input.push('?');
+                                }
+                            }
+                            KeyCode::Char('/') => {
+                                if app.input.is_empty() {
+                                    // Enter command mode, show all commands and seed '/'.
+                                    app.hint_mode = HintMode::Commands;
+                                } else {
+                                    app.hint_mode = HintMode::Default;
+                                }
+                                app.input.push('/');
+                            }
+                            KeyCode::Char(ch) => {
+                                app.hint_mode = HintMode::Default;
+                                app.input.push(ch);
+                            }
+                            KeyCode::Backspace => {
+                                app.input.pop();
+                                if app.input.is_empty() {
+                                    app.hint_mode = HintMode::Default;
+                                }
+                            }
+                            KeyCode::Esc => {
+                                app.input.clear();
+                                app.hint_mode = HintMode::Default;
+                            }
+                            KeyCode::Enter => {
+                                if !app.input.trim().is_empty() {
+                                    let trimmed = app.input.trim().to_string();
+                                    if trimmed == "/login" {
+                                        app.mode = Mode::Login;
+                                        app.login_index = 0;
+                                        app.input.clear();
+                                        app.hint_mode = HintMode::Default;
+                                    } else {
+                                        let line = Line::from(format!("user > {}", trimmed));
+                                        app.messages.push(line);
+                                        app.input.clear();
+                                        app.hint_mode = HintMode::Default;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        },
+                        Mode::Login => match key.code {
+                            KeyCode::Up => {
+                                if app.login_index > 0 {
+                                    app.login_index -= 1;
+                                }
+                            }
+                            KeyCode::Down => {
+                                if app.login_index + 1 < PROVIDERS.len() {
+                                    app.login_index += 1;
+                                }
+                            }
+                            KeyCode::Enter => {
+                                let provider = PROVIDERS[app.login_index];
+                                app.messages.push(Line::from(format!(
+                                    "login > {}",
+                                    provider
+                                )));
+                                app.mode = Mode::Home;
+                                app.input.clear();
+                            }
+                            KeyCode::Esc => {
+                                app.mode = Mode::Home;
+                                app.input.clear();
+                            }
+                            _ => {}
+                        },
                     }
-                    KeyCode::Backspace => {
-                        app.input.pop();
-                    }
-                    KeyCode::Enter => {
-                        if !app.input.trim().is_empty() {
-                            let line = Line::from(format!("user > {}", app.input.trim()));
-                            app.messages.push(line);
-                            app.input.clear();
-                        }
-                    }
-                    _ => {}
-                },
+                }
                 Event::Resize(_, _) => {
                     // Just redraw on next loop iteration.
                 }
