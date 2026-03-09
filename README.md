@@ -1,4 +1,4 @@
-<img src="bird.png" alt="Onebird logo" width="120" />
+<img src="bird.png" alt="Onebird logo" width="200" />
 
 Onebird
 Minimal terminal coding harness
