@@ -1,7 +1,9 @@
+```text
    ___
   ('v')
  ((   ))
   -"-"-
+```
 
 Onebird
 Minimal terminal coding harness
