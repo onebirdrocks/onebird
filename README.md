@@ -1,9 +1,4 @@
-```text
-   ___
-  ('v')
- ((   ))
-  -"-"-
-```
+![Onebird logo](bird.png)
 
 Onebird
 Minimal terminal coding harness
